@@ -42,22 +42,6 @@ STABILITY_TOL    = 8      # Max pixel range in any bbox dimension to be "stable"
 
 
 # ---------------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------------
-
-def build_pipeline():
-    pipeline = dai.Pipeline()
-    cam = pipeline.create(dai.node.ColorCamera)
-    cam.setBoardSocket(dai.CameraBoardSocket.CAM_A)
-    cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
-    cam.setFps(FPS)
-    xout = pipeline.create(dai.node.XLinkOut)
-    xout.setStreamName("rgb")
-    cam.video.link(xout.input)
-    return pipeline
-
-
-# ---------------------------------------------------------------------------
 # ROI detection helpers
 # ---------------------------------------------------------------------------
 
@@ -130,7 +114,6 @@ def run_interactive():
     bg_sub = cv2.createBackgroundSubtractorMOG2(
         history=300, varThreshold=40, detectShadows=False
     )
-    pipeline = build_pipeline()
     accumulator = None
     history: deque = deque(maxlen=STABILITY_WINDOW)
     roi_rect = None
@@ -139,8 +122,15 @@ def run_interactive():
     print("  's'  — save detected ROI to car_speed_tracker.py and exit")
     print("  'q'  — quit without saving")
 
-    with dai.Device(pipeline) as device:
-        q = device.getOutputQueue(name="rgb", maxSize=4, blocking=False)
+    with dai.Pipeline(dai.Device()) as pipeline:
+        cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
+        cap = dai.ImgFrameCapability()
+        cap.size.fixed((1920, 1080))
+        cap.fps.fixed(FPS)
+        xout = cam.requestOutput(cap, True)
+        q = xout.createOutputQueue(maxSize=4, blocking=False)
+        pipeline.start()
+
         win = "Auto ROI  |  's' save  'q' quit"
         cv2.namedWindow(win)
 
@@ -201,7 +191,6 @@ def run_auto(duration_sec: float, confidence_threshold: float):
     bg_sub = cv2.createBackgroundSubtractorMOG2(
         history=300, varThreshold=40, detectShadows=False
     )
-    pipeline = build_pipeline()
     accumulator = None
     history: deque = deque(maxlen=STABILITY_WINDOW)
     best_roi = None
@@ -210,14 +199,19 @@ def run_auto(duration_sec: float, confidence_threshold: float):
     print(f"[AUTO] Observing for up to {duration_sec:.0f}s "
           f"or until {confidence_threshold:.0%} confidence...")
 
-    with dai.Device(pipeline) as device:
-        q = device.getOutputQueue(name="rgb", maxSize=4, blocking=False)
+    with dai.Pipeline(dai.Device()) as pipeline:
+        cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
+        cap = dai.ImgFrameCapability()
+        cap.size.fixed((1920, 1080))
+        cap.fps.fixed(FPS)
+        xout = cam.requestOutput(cap, True)
+        q = xout.createOutputQueue(maxSize=4, blocking=False)
+        pipeline.start()
 
         while True:
             in_frame = q.tryGet()
             if in_frame is None:
                 time.sleep(0.01)
-                # Still respect deadline even when no frames arrive
                 if time.time() >= deadline:
                     break
                 continue

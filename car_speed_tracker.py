@@ -16,25 +16,6 @@ MIN_POINTS_FOR_DISPLAY = 4
 ROI_X_FEET = 58.0           # Real-world width of ROI in feet
 LOG_FILE = "car_log.csv"     # CSV log file path, or "" to disable
 
-# --- PIPELINE SETUP ---
-pipeline = dai.Pipeline()
-cam = pipeline.create(dai.node.ColorCamera)
-cam.setBoardSocket(dai.CameraBoardSocket.CAM_A)
-cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
-cam.setFps(FPS)
-cam.setInterleaved(False)
-
-xout = pipeline.create(dai.node.XLinkOut)
-xout.setStreamName("video")
-cam.video.link(xout.input)
-
-# Background Subtractor
-bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=50, detectShadows=True)
-
-# Tracking dictionary
-trackers = {}
-next_id = 0
-
 # Precompute pixels-to-feet ratio
 ROI_WIDTH_PX = ROI_LANE[2]
 FEET_PER_PIXEL = ROI_X_FEET / ROI_WIDTH_PX if ROI_WIDTH_PX > 0 else 0
@@ -99,8 +80,22 @@ def compute_speed(positions):
     return px_per_sec, mph, dt
 
 
-with dai.Device(pipeline) as device:
-    q_video = device.getOutputQueue(name="video", maxSize=4, blocking=False)
+# Background Subtractor
+bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=50, detectShadows=True)
+
+# Tracking state
+trackers = {}
+next_id = 0
+
+# --- PIPELINE SETUP (depthai v3) ---
+with dai.Pipeline(dai.Device()) as pipeline:
+    cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
+    cap = dai.ImgFrameCapability()
+    cap.size.fixed((1920, 1080))
+    cap.fps.fixed(FPS)
+    xout = cam.requestOutput(cap, True)
+    q_video = xout.createOutputQueue(maxSize=4, blocking=False)
+    pipeline.start()
 
     while True:
         img_data = q_video.get()
@@ -164,12 +159,11 @@ with dai.Device(pipeline) as device:
                         len(positions), duration, positions[0][0], positions[-1][0])
             del trackers[oid]
 
-        # Also log active cars that hit the threshold (for live feedback)
+        # Draw active tracked centroids
         for obj_id, data in trackers.items():
             positions = data["positions"]
             cx, cy = positions[-1][0], positions[-1][1]
             cv2.circle(roi_img, (cx, cy), 5, (0, 255, 0), -1)
-            #cv2.putText(roi_img, f"ID:{obj_id}", (cx+10, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         cv2.imshow("Detection Mask", fg_mask)
         cv2.imshow("Speed Tracker", roi_img)
