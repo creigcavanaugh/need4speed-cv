@@ -92,8 +92,8 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.j
 # Config file helpers
 # ---------------------------------------------------------------------------
 
-def save_config(roi: tuple) -> bool:
-    """Write ROI_LANE to config.json, preserving any existing keys."""
+def save_config(roi: tuple, measured_fps: float = None) -> bool:
+    """Write ROI_LANE (and measured FPS if available) to config.json."""
     x, y, w, h = roi
     try:
         with open(CONFIG_FILE, "r") as f:
@@ -102,10 +102,14 @@ def save_config(roi: tuple) -> bool:
         cfg = {}
 
     cfg["ROI_LANE"] = [x, y, w, h]
+    if measured_fps is not None:
+        cfg["FPS"] = round(measured_fps, 1)
 
     with open(CONFIG_FILE, "w") as f:
         json.dump(cfg, f, indent=2)
-    print(f"[INFO] Saved {CONFIG_FILE}  →  ROI_LANE = ({x}, {y}, {w}, {h})")
+
+    fps_str = f", FPS = {measured_fps:.1f}" if measured_fps else ""
+    print(f"[INFO] Saved {CONFIG_FILE}  →  ROI_LANE = ({x}, {y}, {w}, {h}){fps_str}")
     return True
 
 
@@ -127,6 +131,7 @@ def run_interactive():
     print("  'q'  — quit without saving")
 
     with dai.Pipeline(dai.Device()) as pipeline:
+        pipeline.setXLinkChunkSize(0)  # maximize USB throughput
         cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
         cap = dai.ImgFrameCapability()
         cap.size.fixed((1920, 1080))
@@ -134,6 +139,18 @@ def run_interactive():
         xout = cam.requestOutput(cap, True)
         q = xout.createOutputQueue(maxSize=4, blocking=False)
         pipeline.start()
+
+        device = pipeline.getDefaultDevice()
+        usb_speed = device.getUsbSpeed()
+        print(f"[INFO] USB speed: {usb_speed.name}")
+        if usb_speed.value < dai.UsbSpeed.SUPER.value:
+            print("[WARNING] Not connected at USB 3 SuperSpeed — frame rate will be limited. "
+                  "Try a different port or cable.")
+
+        # FPS measurement
+        fps_frame_count = 0
+        fps_start = time.time()
+        measured_fps = None
 
         win = "Auto ROI  |  's' save  'q' quit"
         cv2.namedWindow(win)
@@ -147,13 +164,20 @@ def run_interactive():
                 break
             elif key == ord("s"):
                 if best_roi:
-                    save_config(best_roi)
+                    save_config(best_roi, measured_fps)
                     break
                 else:
                     print("[WARNING] No ROI detected yet — keep watching.")
 
             if in_frame is None:
                 continue
+
+            fps_frame_count += 1
+            elapsed = time.time() - fps_start
+            if elapsed >= 5.0:
+                measured_fps = fps_frame_count / elapsed
+                fps_frame_count = 0
+                fps_start = time.time()
 
             frame = in_frame.getCvFrame()
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -182,6 +206,10 @@ def run_interactive():
                 cv2.putText(display, "Waiting for motion...", (20, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
 
+            if measured_fps is not None:
+                cv2.putText(display, f"FPS: {measured_fps:.1f}", (20, display.shape[0] - 15),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
+
             cv2.imshow(win, display)
 
     cv2.destroyAllWindows()
@@ -204,6 +232,7 @@ def run_auto(duration_sec: float, confidence_threshold: float):
           f"or until {confidence_threshold:.0%} confidence...")
 
     with dai.Pipeline(dai.Device()) as pipeline:
+        pipeline.setXLinkChunkSize(0)  # maximize USB throughput
         cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
         cap = dai.ImgFrameCapability()
         cap.size.fixed((1920, 1080))
@@ -212,6 +241,16 @@ def run_auto(duration_sec: float, confidence_threshold: float):
         q = xout.createOutputQueue(maxSize=4, blocking=False)
         pipeline.start()
 
+        device = pipeline.getDefaultDevice()
+        usb_speed = device.getUsbSpeed()
+        print(f"[INFO] USB speed: {usb_speed.name}")
+        if usb_speed.value < dai.UsbSpeed.SUPER.value:
+            print("[WARNING] Not connected at USB 3 SuperSpeed — frame rate will be limited.")
+
+        fps_frame_count = 0
+        fps_start = time.time()
+        measured_fps = None
+
         while True:
             in_frame = q.tryGet()
             if in_frame is None:
@@ -219,6 +258,13 @@ def run_auto(duration_sec: float, confidence_threshold: float):
                 if time.time() >= deadline:
                     break
                 continue
+
+            fps_frame_count += 1
+            elapsed_fps = time.time() - fps_start
+            if elapsed_fps >= 5.0:
+                measured_fps = fps_frame_count / elapsed_fps
+                fps_frame_count = 0
+                fps_start = time.time()
 
             frame = in_frame.getCvFrame()
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -260,7 +306,7 @@ def run_auto(duration_sec: float, confidence_threshold: float):
         sys.exit(1)
 
     print(f"[AUTO] Using ROI: {best_roi}")
-    if not save_config(best_roi):
+    if not save_config(best_roi, measured_fps):
         sys.exit(1)
 
     print(f"[AUTO] Launching {TRACKER_SCRIPT} ...")

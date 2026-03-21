@@ -28,6 +28,9 @@ if os.path.exists(_cfg_path):
     if "ROI_X_FEET" in _cfg:
         ROI_X_FEET = float(_cfg["ROI_X_FEET"])
         print(f"[config] ROI_X_FEET = {ROI_X_FEET}")
+    if "FPS" in _cfg:
+        FPS = int(round(_cfg["FPS"]))
+        print(f"[config] FPS = {FPS}")
 
 # Precompute pixels-to-feet ratio
 ROI_WIDTH_PX = ROI_LANE[2]
@@ -102,6 +105,7 @@ next_id = 0
 
 # --- PIPELINE SETUP (depthai v3) ---
 with dai.Pipeline(dai.Device()) as pipeline:
+    pipeline.setXLinkChunkSize(0)  # maximize USB throughput
     cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
     cap = dai.ImgFrameCapability()
     cap.size.fixed((1920, 1080))
@@ -109,6 +113,12 @@ with dai.Pipeline(dai.Device()) as pipeline:
     xout = cam.requestOutput(cap, True)
     q_video = xout.createOutputQueue(maxSize=4, blocking=False)
     pipeline.start()
+
+    device = pipeline.getDefaultDevice()
+    usb_speed = device.getUsbSpeed()
+    print(f"[INFO] USB speed: {usb_speed.name}")
+    if usb_speed.value < dai.UsbSpeed.SUPER.value:
+        print("[WARNING] Not on USB 3 SuperSpeed — frame rate will be limited.")
 
     while True:
         img_data = q_video.get()
