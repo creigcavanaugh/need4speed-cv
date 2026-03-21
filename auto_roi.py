@@ -33,10 +33,11 @@ import numpy as np
 # --- Tunable constants ---
 TRACKER_SCRIPT   = "car_speed_tracker.py"
 FPS              = 30
-DECAY            = 0.97   # Exponential decay for heatmap accumulator (higher = longer memory)
+DECAY            = 0.992  # Exponential decay for heatmap accumulator (higher = longer memory)
 HEATMAP_THRESH   = 55     # 0-255 threshold applied to normalized heatmap
 MORPH_KERNEL     = 20     # Morphological close kernel size (pixels) to fill gaps
 MIN_REGION_AREA  = 1000   # Min thresholded-heatmap area (px²) for a region to be valid
+MIN_ASPECT_RATIO = 2.5    # Road lane must be at least this many times wider than tall
 STABILITY_WINDOW = 90     # Rolling frame window used to compute confidence
 STABILITY_TOL    = 8      # Max pixel range in any bbox dimension to be "stable"
 
@@ -57,10 +58,16 @@ def detect_roi(heatmap_norm):
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
-    largest = max(contours, key=cv2.contourArea)
-    if cv2.contourArea(largest) < MIN_REGION_AREA:
-        return None
-    return cv2.boundingRect(largest)
+    # Pick the largest contour that also passes the aspect ratio check.
+    # Trees/bushes tend to be square or tall; a road lane is always wide.
+    candidates = sorted(contours, key=cv2.contourArea, reverse=True)
+    for cnt in candidates:
+        if cv2.contourArea(cnt) < MIN_REGION_AREA:
+            break  # remaining contours are smaller, no point checking
+        x, y, w, h = cv2.boundingRect(cnt)
+        if h > 0 and (w / h) >= MIN_ASPECT_RATIO:
+            return (x, y, w, h)
+    return None
 
 
 def compute_confidence(history: deque) -> float:
