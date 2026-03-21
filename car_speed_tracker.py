@@ -4,17 +4,30 @@ import time
 import numpy as np
 from datetime import datetime
 import csv
+import json
 import os
 
 # Car Speed Estimation using DepthAI and OpenCV
 
-# --- SETTINGS ---
+# --- SETTINGS (defaults — overridden by config.json if present) ---
 ROI_LANE = (771, 355, 98, 50)
 MIN_BLOB_AREA = 80
 FPS = 30
 MIN_POINTS_FOR_DISPLAY = 4
 ROI_X_FEET = 58.0           # Real-world width of ROI in feet
 LOG_FILE = "car_log.csv"     # CSV log file path, or "" to disable
+
+# Load config.json overrides
+_cfg_path = "config.json"
+if os.path.exists(_cfg_path):
+    with open(_cfg_path) as _f:
+        _cfg = json.load(_f)
+    if "ROI_LANE" in _cfg:
+        ROI_LANE = tuple(_cfg["ROI_LANE"])
+        print(f"[config] ROI_LANE = {ROI_LANE}")
+    if "ROI_X_FEET" in _cfg:
+        ROI_X_FEET = float(_cfg["ROI_X_FEET"])
+        print(f"[config] ROI_X_FEET = {ROI_X_FEET}")
 
 # Precompute pixels-to-feet ratio
 ROI_WIDTH_PX = ROI_LANE[2]

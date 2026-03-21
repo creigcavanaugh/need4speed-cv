@@ -20,7 +20,7 @@ Usage:
 """
 
 import argparse
-import re
+import json
 import subprocess
 import sys
 import time
@@ -84,32 +84,27 @@ def compute_confidence(history: deque) -> float:
     return max(0.0, min(1.0, 1.0 - max_spread / (STABILITY_TOL * 5)))
 
 
+CONFIG_FILE = "config.json"
+
+
 # ---------------------------------------------------------------------------
-# Patching car_speed_tracker.py
+# Config file helpers
 # ---------------------------------------------------------------------------
 
-def patch_tracker(roi: tuple) -> bool:
-    """Replace ROI_LANE in car_speed_tracker.py with the detected roi."""
+def save_config(roi: tuple) -> bool:
+    """Write ROI_LANE to config.json, preserving any existing keys."""
     x, y, w, h = roi
     try:
-        with open(TRACKER_SCRIPT, "r") as f:
-            src = f.read()
-    except FileNotFoundError:
-        print(f"[ERROR] {TRACKER_SCRIPT} not found.")
-        return False
+        with open(CONFIG_FILE, "r") as f:
+            cfg = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        cfg = {}
 
-    new_src = re.sub(
-        r"ROI_LANE\s*=\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)",
-        f"ROI_LANE = ({x}, {y}, {w}, {h})",
-        src,
-    )
-    if new_src == src:
-        print(f"[WARNING] ROI_LANE pattern not found in {TRACKER_SCRIPT} — no changes made.")
-        return False
+    cfg["ROI_LANE"] = [x, y, w, h]
 
-    with open(TRACKER_SCRIPT, "w") as f:
-        f.write(new_src)
-    print(f"[INFO] Patched {TRACKER_SCRIPT}  →  ROI_LANE = ({x}, {y}, {w}, {h})")
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print(f"[INFO] Saved {CONFIG_FILE}  →  ROI_LANE = ({x}, {y}, {w}, {h})")
     return True
 
 
@@ -182,7 +177,7 @@ def run_interactive():
                 break
             elif key == ord("s"):
                 if roi_rect:
-                    patch_tracker(roi_rect)
+                    save_config(roi_rect)
                     break
                 else:
                     print("[WARNING] No ROI detected yet — keep watching.")
@@ -263,7 +258,7 @@ def run_auto(duration_sec: float, confidence_threshold: float):
         sys.exit(1)
 
     print(f"[AUTO] Using ROI: {best_roi}")
-    if not patch_tracker(best_roi):
+    if not save_config(best_roi):
         sys.exit(1)
 
     print(f"[AUTO] Launching {TRACKER_SCRIPT} ...")
