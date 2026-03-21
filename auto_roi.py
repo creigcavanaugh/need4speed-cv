@@ -119,9 +119,10 @@ def run_interactive():
     accumulator = None
     history: deque = deque(maxlen=STABILITY_WINDOW)
     roi_rect = None
+    best_roi = None  # last known good detection
 
     print("Watching for motion...")
-    print("  's'  — save detected ROI to car_speed_tracker.py and exit")
+    print("  's'  — save detected ROI to config.json and exit")
     print("  'q'  — quit without saving")
 
     with dai.Pipeline(dai.Device()) as pipeline:
@@ -159,6 +160,7 @@ def run_interactive():
             roi_rect = detect_roi(heatmap_norm)
             if roi_rect:
                 history.append(roi_rect)
+                best_roi = roi_rect
                 x, y, w, h = roi_rect
                 conf = compute_confidence(history)
                 color = (0, 255, 0) if conf >= 0.7 else (0, 200, 255)
@@ -176,8 +178,8 @@ def run_interactive():
                 print("[INFO] Quit without saving.")
                 break
             elif key == ord("s"):
-                if roi_rect:
-                    save_config(roi_rect)
+                if best_roi:
+                    save_config(best_roi)
                     break
                 else:
                     print("[WARNING] No ROI detected yet — keep watching.")
