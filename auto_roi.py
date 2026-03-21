@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -84,7 +85,7 @@ def compute_confidence(history: deque) -> float:
     return max(0.0, min(1.0, 1.0 - max_spread / (STABILITY_TOL * 5)))
 
 
-CONFIG_FILE = "config.json"
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 
 # ---------------------------------------------------------------------------
@@ -139,10 +140,19 @@ def run_interactive():
 
         while True:
             in_frame = q.tryGet()
-            if in_frame is None:
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    print("[INFO] Quit without saving.")
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                print("[INFO] Quit without saving.")
+                break
+            elif key == ord("s"):
+                if best_roi:
+                    save_config(best_roi)
                     break
+                else:
+                    print("[WARNING] No ROI detected yet — keep watching.")
+
+            if in_frame is None:
                 continue
 
             frame = in_frame.getCvFrame()
@@ -173,16 +183,6 @@ def run_interactive():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
 
             cv2.imshow(win, display)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                print("[INFO] Quit without saving.")
-                break
-            elif key == ord("s"):
-                if best_roi:
-                    save_config(best_roi)
-                    break
-                else:
-                    print("[WARNING] No ROI detected yet — keep watching.")
 
     cv2.destroyAllWindows()
 
