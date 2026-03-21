@@ -36,10 +36,10 @@ FPS              = 30
 DECAY            = 0.992  # Exponential decay for heatmap accumulator (higher = longer memory)
 HEATMAP_THRESH   = 55     # 0-255 threshold applied to normalized heatmap
 MORPH_KERNEL     = 20     # Morphological close kernel size (pixels) to fill gaps
-MIN_REGION_AREA  = 1000   # Min thresholded-heatmap area (px²) for a region to be valid
-MIN_ASPECT_RATIO = 2.5    # Road lane must be at least this many times wider than tall
+MIN_REGION_AREA  = 100    # Min thresholded-heatmap area (px²) for a region to be valid
+MIN_ASPECT_RATIO = 1.5    # Road lane must be wider than tall (original ROI was ~2:1)
 STABILITY_WINDOW = 90     # Rolling frame window used to compute confidence
-STABILITY_TOL    = 8      # Max pixel range in any bbox dimension to be "stable"
+STABILITY_TOL    = 20     # Max pixel range in any bbox dimension to be "stable"
 
 
 # ---------------------------------------------------------------------------
