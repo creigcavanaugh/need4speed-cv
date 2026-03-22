@@ -24,6 +24,8 @@ Built for the [Luxonis OAK-D](https://docs.luxonis.com/hardware/products/OAK-D/)
 | `define_roi.py` | Live camera tool to visually draw and save your ROI coordinates |
 | `car_speed_tracker.py` | Main tracker — runs live detection, logs results to `car_log.csv` |
 | `generate_report.py` | Reads `car_log.csv` and produces a PDF report |
+| `oak_test.py` | Diagnostic utility for validating camera connection |
+| `auto_roi.py` | Automated ROI detection without manual drawing |
 
 ## Setup
 
@@ -35,7 +37,7 @@ Built for the [Luxonis OAK-D](https://docs.luxonis.com/hardware/products/OAK-D/)
 ### Install dependencies
 
 ```bash
-pip install depthai opencv-python numpy matplotlib reportlab
+pip install -r requirements.txt
 ```
 
 ## Usage

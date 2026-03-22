@@ -19,6 +19,7 @@ LOG_FILE = "car_log.csv"     # CSV log file path, or "" to disable
 
 # Load config.json overrides
 _cfg_path = "config.json"
+_cfg = {}
 if os.path.exists(_cfg_path):
     with open(_cfg_path) as _f:
         _cfg = json.load(_f)
@@ -35,6 +36,11 @@ if os.path.exists(_cfg_path):
 # Precompute pixels-to-feet ratio
 ROI_WIDTH_PX = ROI_LANE[2]
 FEET_PER_PIXEL = ROI_X_FEET / ROI_WIDTH_PX if ROI_WIDTH_PX > 0 else 0
+
+# feet_per_pixel in config overrides the derived value (use when ROI width changes)
+if "feet_per_pixel" in _cfg:
+    FEET_PER_PIXEL = float(_cfg["feet_per_pixel"])
+    print(f"[config] feet_per_pixel = {FEET_PER_PIXEL} (overrides ROI_X_FEET / ROI_WIDTH_PX)")
 
 # Write CSV header if log file is new or empty
 if LOG_FILE and (not os.path.exists(LOG_FILE) or os.path.getsize(LOG_FILE) == 0):

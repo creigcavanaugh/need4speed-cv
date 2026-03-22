@@ -9,7 +9,7 @@ Real-time vehicle speed monitoring system using a Luxonis OAK-D camera. Detects 
 ## Setup
 
 ```bash
-pip install depthai opencv-python numpy matplotlib reportlab
+pip install -r requirements.txt
 ```
 
 Requires a physical Luxonis OAK-D camera connected via USB.

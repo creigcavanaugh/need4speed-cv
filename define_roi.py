@@ -1,5 +1,7 @@
 import depthai as dai
 import cv2
+import json
+import os
 
 # Global variables to store mouse interaction state
 roi_defined = False
@@ -73,9 +75,17 @@ with dai.Pipeline(dai.Device()) as pipeline:
         if key == ord('q'):
             break
         elif key == ord('s') and roi_defined:
+            cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+            cfg = {}
+            if os.path.exists(cfg_path):
+                with open(cfg_path) as f:
+                    cfg = json.load(f)
+            cfg["ROI_LANE"] = list(roi_coordinates)
+            with open(cfg_path, "w") as f:
+                json.dump(cfg, f, indent=2)
             print("\n" + "="*30)
             print(f"FINAL ROI TO USE: {roi_coordinates}")
-            print("Copy this tuple (x, y, w, h) for the next step.")
+            print(f"Saved to {cfg_path}")
             print("="*30)
             break
 
