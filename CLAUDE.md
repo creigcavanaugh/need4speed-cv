@@ -36,6 +36,7 @@ All tunable parameters are at the top of `car_speed_tracker.py`:
 - `FPS` — camera frame rate
 - `MIN_POINTS_FOR_DISPLAY` — minimum tracking points required to log a vehicle pass
 - `LOG_FILE` — CSV output path; set to `""` to disable logging
+- `DISPLAY_PREVIEW` — show live cv2 windows; set `False` (or `"display": false` in `config.json`) for headless environments
 
 ## Architecture
 

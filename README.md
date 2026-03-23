@@ -69,7 +69,7 @@ python generate_report.py --input car_log.csv --output report.pdf
 
 ## Configuration
 
-Edit the settings at the top of `car_speed_tracker.py`:
+Edit the settings at the top of `car_speed_tracker.py`, or override them in `config.json`:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -79,6 +79,7 @@ Edit the settings at the top of `car_speed_tracker.py`:
 | `FPS` | `30` | Camera frame rate |
 | `MIN_POINTS_FOR_DISPLAY` | `4` | Minimum tracking points required to log a vehicle |
 | `LOG_FILE` | `car_log.csv` | CSV output path, or `""` to disable logging |
+| `DISPLAY_PREVIEW` | `True` | Show live cv2 windows; set `False` for headless environments |
 
 ## License
 

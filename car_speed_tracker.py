@@ -16,6 +16,7 @@ FPS = 30
 MIN_POINTS_FOR_DISPLAY = 4
 ROI_X_FEET = 58.0           # Real-world width of ROI in feet
 LOG_FILE = "car_log.csv"     # CSV log file path, or "" to disable
+DISPLAY_PREVIEW = True       # Set False for headless/no-display environments
 
 # Load config.json overrides
 _cfg_path = "config.json"
@@ -32,6 +33,9 @@ if os.path.exists(_cfg_path):
     if "FPS" in _cfg:
         FPS = int(round(_cfg["FPS"]))
         print(f"[config] FPS = {FPS}")
+    if "display" in _cfg:
+        DISPLAY_PREVIEW = bool(_cfg["display"])
+        print(f"[config] display = {DISPLAY_PREVIEW}")
 
 # Precompute pixels-to-feet ratio
 ROI_WIDTH_PX = ROI_LANE[2]
@@ -126,79 +130,88 @@ with dai.Pipeline(dai.Device()) as pipeline:
     if usb_speed.value < dai.UsbSpeed.SUPER.value:
         print("[WARNING] Not on USB 3 SuperSpeed — frame rate will be limited.")
 
-    while True:
-        img_data = q_video.get()
-        frame = img_data.getCvFrame()
+    if DISPLAY_PREVIEW:
+        print("Press 'q' to quit.")
+    else:
+        print("Running headless. Press Ctrl+C to stop.")
 
-        x, y, w, h = ROI_LANE
-        roi_img = frame[y:y+h, x:x+w]
+    try:
+        while True:
+            img_data = q_video.get()
+            frame = img_data.getCvFrame()
 
-        fg_mask = bg_subtractor.apply(roi_img)
-        _, fg_mask = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)
+            x, y, w, h = ROI_LANE
+            roi_img = frame[y:y+h, x:x+w]
 
-        contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            fg_mask = bg_subtractor.apply(roi_img)
+            _, fg_mask = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)
 
-        current_frame_time = time.time()
+            contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        detected_centroids = []
-        for cnt in contours:
-            if cv2.contourArea(cnt) < MIN_BLOB_AREA:
-                continue
-            M = cv2.moments(cnt)
-            if M["m00"] != 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                detected_centroids.append((cx, cy))
+            current_frame_time = time.time()
 
-        updated_ids = set()
-        for centroid in detected_centroids:
-            min_dist = float('inf')
-            matched_id = None
-            for obj_id, data in trackers.items():
-                if obj_id in updated_ids:
+            detected_centroids = []
+            for cnt in contours:
+                if cv2.contourArea(cnt) < MIN_BLOB_AREA:
                     continue
-                last_pos = data["positions"][-1][:2]
-                dist = euclidean_distance(centroid, last_pos)
-                if dist < 40 and dist < min_dist:
-                    min_dist = dist
-                    matched_id = obj_id
-            if matched_id is not None:
-                trackers[matched_id]["positions"].append((centroid[0], centroid[1], current_frame_time))
-                updated_ids.add(matched_id)
-            else:
-                trackers[next_id] = {
-                    "positions": [(centroid[0], centroid[1], current_frame_time)],
-                    "logged": False
-                }
-                updated_ids.add(next_id)
-                next_id += 1
+                M = cv2.moments(cnt)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    detected_centroids.append((cx, cy))
 
-        # Log cars that just left the ROI (stale) and qualified
-        stale_ids = [oid for oid in trackers if oid not in updated_ids]
-        for oid in stale_ids:
-            data = trackers[oid]
-            positions = data["positions"]
-            if (len(positions) >= MIN_POINTS_FOR_DISPLAY
-                    and is_consistent_direction(positions)
-                    and not data["logged"]):
-                speed_px, speed_mph, duration = compute_speed(positions)
-                direction = "RIGHT" if positions[-1][0] > positions[0][0] else "LEFT"
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                log_car(timestamp, oid, direction, speed_mph, speed_px,
-                        len(positions), duration, positions[0][0], positions[-1][0])
-            del trackers[oid]
+            updated_ids = set()
+            for centroid in detected_centroids:
+                min_dist = float('inf')
+                matched_id = None
+                for obj_id, data in trackers.items():
+                    if obj_id in updated_ids:
+                        continue
+                    last_pos = data["positions"][-1][:2]
+                    dist = euclidean_distance(centroid, last_pos)
+                    if dist < 40 and dist < min_dist:
+                        min_dist = dist
+                        matched_id = obj_id
+                if matched_id is not None:
+                    trackers[matched_id]["positions"].append((centroid[0], centroid[1], current_frame_time))
+                    updated_ids.add(matched_id)
+                else:
+                    trackers[next_id] = {
+                        "positions": [(centroid[0], centroid[1], current_frame_time)],
+                        "logged": False
+                    }
+                    updated_ids.add(next_id)
+                    next_id += 1
 
-        # Draw active tracked centroids
-        for obj_id, data in trackers.items():
-            positions = data["positions"]
-            cx, cy = positions[-1][0], positions[-1][1]
-            cv2.circle(roi_img, (cx, cy), 5, (0, 255, 0), -1)
+            # Log cars that just left the ROI (stale) and qualified
+            stale_ids = [oid for oid in trackers if oid not in updated_ids]
+            for oid in stale_ids:
+                data = trackers[oid]
+                positions = data["positions"]
+                if (len(positions) >= MIN_POINTS_FOR_DISPLAY
+                        and is_consistent_direction(positions)
+                        and not data["logged"]):
+                    speed_px, speed_mph, duration = compute_speed(positions)
+                    direction = "RIGHT" if positions[-1][0] > positions[0][0] else "LEFT"
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    log_car(timestamp, oid, direction, speed_mph, speed_px,
+                            len(positions), duration, positions[0][0], positions[-1][0])
+                del trackers[oid]
 
-        cv2.imshow("Detection Mask", fg_mask)
-        cv2.imshow("Speed Tracker", roi_img)
+            if DISPLAY_PREVIEW:
+                # Draw active tracked centroids
+                for obj_id, data in trackers.items():
+                    positions = data["positions"]
+                    cx, cy = positions[-1][0], positions[-1][1]
+                    cv2.circle(roi_img, (cx, cy), 5, (0, 255, 0), -1)
 
-        if cv2.waitKey(1) == ord('q'):
-            break
+                cv2.imshow("Detection Mask", fg_mask)
+                cv2.imshow("Speed Tracker", roi_img)
+
+                if cv2.waitKey(1) == ord('q'):
+                    break
+    except KeyboardInterrupt:
+        pass
 
     # Log any remaining tracked cars on exit
     for oid, data in trackers.items():
@@ -212,4 +225,5 @@ with dai.Pipeline(dai.Device()) as pipeline:
             log_car(timestamp, oid, direction, speed_mph, speed_px,
                     len(positions), duration, positions[0][0], positions[-1][0])
 
-cv2.destroyAllWindows()
+if DISPLAY_PREVIEW:
+    cv2.destroyAllWindows()
