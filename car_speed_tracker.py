@@ -17,6 +17,7 @@ MIN_POINTS_FOR_DISPLAY = 4
 ROI_X_FEET = 58.0           # Real-world width of ROI in feet
 LOG_FILE = "car_log.csv"     # CSV log file path, or "" to disable
 DISPLAY_PREVIEW = True       # Set False for headless/no-display environments
+DEBUG = False                # Set True to log contour areas and centroids
 
 # Load config.json overrides
 _cfg_path = "config.json"
@@ -36,6 +37,9 @@ if os.path.exists(_cfg_path):
     if "display" in _cfg:
         DISPLAY_PREVIEW = bool(_cfg["display"])
         print(f"[config] display = {DISPLAY_PREVIEW}")
+    if "debug" in _cfg:
+        DEBUG = bool(_cfg["debug"])
+        print(f"[config] debug = {DEBUG}")
 
 # Precompute pixels-to-feet ratio
 ROI_WIDTH_PX = ROI_LANE[2]
@@ -154,8 +158,8 @@ with dai.Pipeline(dai.Device()) as pipeline:
             for cnt in contours:
                 area = cv2.contourArea(cnt)
                 if area < MIN_BLOB_AREA:
-                    # DEBUG — remove once detection is confirmed working
-                    print(f"[DEBUG] filtered contour area={area:.1f} (MIN_BLOB_AREA={MIN_BLOB_AREA})")
+                    if DEBUG:
+                        print(f"[DEBUG] filtered contour area={area:.1f} (MIN_BLOB_AREA={MIN_BLOB_AREA})")
                     continue
                 M = cv2.moments(cnt)
                 if M["m00"] != 0:
@@ -163,8 +167,7 @@ with dai.Pipeline(dai.Device()) as pipeline:
                     cy = int(M["m01"] / M["m00"])
                     detected_centroids.append((cx, cy))
 
-            # DEBUG — remove once detection is confirmed working
-            if detected_centroids:
+            if DEBUG and detected_centroids:
                 print(f"[DEBUG] {len(detected_centroids)} centroid(s): {detected_centroids}")
 
             updated_ids = set()
