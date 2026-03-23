@@ -152,13 +152,20 @@ with dai.Pipeline(dai.Device()) as pipeline:
 
             detected_centroids = []
             for cnt in contours:
-                if cv2.contourArea(cnt) < MIN_BLOB_AREA:
+                area = cv2.contourArea(cnt)
+                if area < MIN_BLOB_AREA:
+                    # DEBUG — remove once detection is confirmed working
+                    print(f"[DEBUG] filtered contour area={area:.1f} (MIN_BLOB_AREA={MIN_BLOB_AREA})")
                     continue
                 M = cv2.moments(cnt)
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
                     detected_centroids.append((cx, cy))
+
+            # DEBUG — remove once detection is confirmed working
+            if detected_centroids:
+                print(f"[DEBUG] {len(detected_centroids)} centroid(s): {detected_centroids}")
 
             updated_ids = set()
             for centroid in detected_centroids:
