@@ -24,6 +24,7 @@ MIN_POINTS_FOR_DISPLAY = 4
 MIN_DURATION_SEC = 1.0       # Ignore tracks shorter than this (filters spurious blobs)
 MATCH_DIST_FT = 4.0          # Max real-world distance (feet) between consecutive detections to match same track
 DIRECTION_TOLERANCE_FT = 1.0 # Per-step backward jitter tolerated; overall start->end trend must dominate
+CAMERA_RETRY_DELAY_SEC = 5   # Seconds to wait before reconnecting after a camera error
 LOG_FILE = "car_log_polygon.csv"
 CAPTURE_IMAGES = False       # Save full-frame JPEG for each logged car
 CAPTURE_DIR = "captures"     # Output folder for captured images
@@ -68,6 +69,9 @@ if os.path.exists(_cfg_path):
     if "direction_tolerance_ft" in _cfg:
         DIRECTION_TOLERANCE_FT = float(_cfg["direction_tolerance_ft"])
         print(f"[config] direction_tolerance_ft = {DIRECTION_TOLERANCE_FT}")
+    if "camera_retry_delay_sec" in _cfg:
+        CAMERA_RETRY_DELAY_SEC = float(_cfg["camera_retry_delay_sec"])
+        print(f"[config] camera_retry_delay_sec = {CAMERA_RETRY_DELAY_SEC}")
 
 if ROI_POLYGON is None or len(ROI_POLYGON) != 4:
     raise SystemExit("[ERROR] No 4-point ROI_POLYGON in config.json. Run define_polygon_roi.py first.")
@@ -181,146 +185,8 @@ def compute_speed_ft(positions):
     return ft_per_sec, mph, dt
 
 
-bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=50, detectShadows=True)
-trackers = {}
-next_id = 0
-mask_full = None
-
-with dai.Pipeline(dai.Device()) as pipeline:
-    pipeline.setXLinkChunkSize(0)
-    cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
-    cap = dai.ImgFrameCapability()
-    cap.size.fixed((1920, 1080))
-    cap.fps.fixed(FPS)
-    xout = cam.requestOutput(cap, True)
-    q_video = xout.createOutputQueue(maxSize=4, blocking=False)
-    pipeline.start()
-
-    device = pipeline.getDefaultDevice()
-    usb_speed = device.getUsbSpeed()
-    print(f"[INFO] USB speed: {usb_speed.name}")
-    if usb_speed.value < dai.UsbSpeed.SUPER.value:
-        print("[WARNING] Not on USB 3 SuperSpeed - frame rate will be limited.")
-
-    if DISPLAY_PREVIEW:
-        print("Press 'q' to quit.")
-    else:
-        print("Running headless. Press Ctrl+C to stop.")
-
-    try:
-        while True:
-            img_data = q_video.get()
-            frame = img_data.getCvFrame()
-
-            if mask_full is None:
-                mask_full = np.zeros(frame.shape[:2], dtype=np.uint8)
-                cv2.fillPoly(mask_full, [polygon_np], 255)
-
-            frame_crop = frame[by:by+bh, bx:bx+bw]
-            mask_crop = mask_full[by:by+bh, bx:bx+bw]
-            roi_img = cv2.bitwise_and(frame_crop, frame_crop, mask=mask_crop)
-
-            fg_mask = bg_subtractor.apply(roi_img)
-            _, fg_mask = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)
-            fg_mask = cv2.bitwise_and(fg_mask, fg_mask, mask=mask_crop)
-
-            contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            current_frame_time = time.time()
-
-            detected = []
-            for cnt in contours:
-                area = cv2.contourArea(cnt)
-                if area < MIN_BLOB_AREA:
-                    if DEBUG:
-                        print(f"[DEBUG] filtered area={area:.1f} (MIN_BLOB_AREA={MIN_BLOB_AREA})")
-                    continue
-                M = cv2.moments(cnt)
-                if M["m00"] != 0:
-                    cx_local = int(M["m10"] / M["m00"])
-                    cy_local = int(M["m01"] / M["m00"])
-                    cx_full = cx_local + bx
-                    cy_full = cy_local + by
-                    fx, fy = pixel_to_feet(cx_full, cy_full)
-                    detected.append((cx_full, cy_full, fx, fy))
-
-            if DEBUG and detected:
-                print(f"[DEBUG] {len(detected)} centroid(s)")
-
-            updated_ids = set()
-            for cx, cy, fx, fy in detected:
-                min_dist = float('inf')
-                matched_id = None
-                for obj_id, data in trackers.items():
-                    if obj_id in updated_ids:
-                        continue
-                    last = data["positions"][-1]
-                    d = euclidean_ft((fx, fy), (last[3], last[4]))
-                    if d < MATCH_DIST_FT and d < min_dist:
-                        min_dist = d
-                        matched_id = obj_id
-                if matched_id is not None:
-                    trackers[matched_id]["positions"].append((cx, cy, current_frame_time, fx, fy))
-                    if CAPTURE_IMAGES:
-                        trackers[matched_id]["frame"] = frame.copy()
-                    updated_ids.add(matched_id)
-                else:
-                    trackers[next_id] = {
-                        "positions": [(cx, cy, current_frame_time, fx, fy)],
-                        "logged": False,
-                        "frame": frame.copy() if CAPTURE_IMAGES else None,
-                    }
-                    updated_ids.add(next_id)
-                    next_id += 1
-
-            stale_ids = [oid for oid in trackers if oid not in updated_ids]
-            for oid in stale_ids:
-                data = trackers[oid]
-                positions = data["positions"]
-                if data["logged"]:
-                    del trackers[oid]
-                    continue
-                if len(positions) < MIN_POINTS_FOR_DISPLAY:
-                    if DEBUG:
-                        print(f"[DEBUG] dropped track #{oid}: points={len(positions)} < {MIN_POINTS_FOR_DISPLAY}")
-                    del trackers[oid]
-                    continue
-                direction, dir_reason = direction_check(positions, DIRECTION_TOLERANCE_FT)
-                if direction is None:
-                    if DEBUG:
-                        print(f"[DEBUG] dropped track #{oid}: direction reject ({dir_reason})")
-                    del trackers[oid]
-                    continue
-                speed_ft, speed_mph, duration = compute_speed_ft(positions)
-                if duration < MIN_DURATION_SEC:
-                    if DEBUG:
-                        print(f"[DEBUG] dropped track #{oid}: duration={duration:.2f}s < {MIN_DURATION_SEC}s")
-                    del trackers[oid]
-                    continue
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                log_car(timestamp, oid, direction, speed_mph, speed_ft,
-                        len(positions), duration,
-                        positions[0][4], positions[-1][4])
-                if CAPTURE_IMAGES:
-                    save_capture(data.get("frame"), timestamp, oid, direction, speed_mph)
-                del trackers[oid]
-
-            if DISPLAY_PREVIEW:
-                disp = frame.copy()
-                cv2.polylines(disp, [polygon_np], isClosed=True, color=(0, 0, 255), thickness=2)
-                for obj_id, data in trackers.items():
-                    cx, cy = data["positions"][-1][0], data["positions"][-1][1]
-                    cv2.circle(disp, (cx, cy), 6, (0, 255, 0), -1)
-                    cv2.putText(disp, f"#{obj_id}", (cx + 8, cy - 8),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-
-                cv2.imshow("Detection Mask", fg_mask)
-                cv2.imshow("Speed Tracker (Polygon)", disp)
-
-                if cv2.waitKey(1) == ord('q'):
-                    break
-    except KeyboardInterrupt:
-        pass
-
+def flush_trackers(trackers):
+    """Log any qualifying tracks still in memory (called on clean exit or before camera restart)."""
     for oid, data in trackers.items():
         positions = data["positions"]
         if data["logged"] or len(positions) < MIN_POINTS_FOR_DISPLAY:
@@ -337,6 +203,166 @@ with dai.Pipeline(dai.Device()) as pipeline:
                 positions[0][4], positions[-1][4])
         if CAPTURE_IMAGES:
             save_capture(data.get("frame"), timestamp, oid, direction, speed_mph)
+
+
+# mask_full is derived from the polygon and never changes across restarts
+mask_full = None
+next_id = 0
+quit_requested = False
+
+while not quit_requested:
+    bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=50, detectShadows=True)
+    trackers = {}
+
+    try:
+        with dai.Pipeline(dai.Device()) as pipeline:
+            pipeline.setXLinkChunkSize(0)
+            cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
+            cap = dai.ImgFrameCapability()
+            cap.size.fixed((1920, 1080))
+            cap.fps.fixed(FPS)
+            xout = cam.requestOutput(cap, True)
+            q_video = xout.createOutputQueue(maxSize=4, blocking=False)
+            pipeline.start()
+
+            device = pipeline.getDefaultDevice()
+            usb_speed = device.getUsbSpeed()
+            print(f"[INFO] USB speed: {usb_speed.name}")
+            if usb_speed.value < dai.UsbSpeed.SUPER.value:
+                print("[WARNING] Not on USB 3 SuperSpeed - frame rate will be limited.")
+
+            if DISPLAY_PREVIEW:
+                print("Press 'q' to quit.")
+            else:
+                print("Running headless. Press Ctrl+C to stop.")
+
+            try:
+                while True:
+                    img_data = q_video.get()
+                    frame = img_data.getCvFrame()
+
+                    if mask_full is None:
+                        mask_full = np.zeros(frame.shape[:2], dtype=np.uint8)
+                        cv2.fillPoly(mask_full, [polygon_np], 255)
+
+                    frame_crop = frame[by:by+bh, bx:bx+bw]
+                    mask_crop = mask_full[by:by+bh, bx:bx+bw]
+                    roi_img = cv2.bitwise_and(frame_crop, frame_crop, mask=mask_crop)
+
+                    fg_mask = bg_subtractor.apply(roi_img)
+                    _, fg_mask = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)
+                    fg_mask = cv2.bitwise_and(fg_mask, fg_mask, mask=mask_crop)
+
+                    contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    current_frame_time = time.time()
+
+                    detected = []
+                    for cnt in contours:
+                        area = cv2.contourArea(cnt)
+                        if area < MIN_BLOB_AREA:
+                            if DEBUG:
+                                print(f"[DEBUG] filtered area={area:.1f} (MIN_BLOB_AREA={MIN_BLOB_AREA})")
+                            continue
+                        M = cv2.moments(cnt)
+                        if M["m00"] != 0:
+                            cx_local = int(M["m10"] / M["m00"])
+                            cy_local = int(M["m01"] / M["m00"])
+                            cx_full = cx_local + bx
+                            cy_full = cy_local + by
+                            fx, fy = pixel_to_feet(cx_full, cy_full)
+                            detected.append((cx_full, cy_full, fx, fy))
+
+                    if DEBUG and detected:
+                        print(f"[DEBUG] {len(detected)} centroid(s)")
+
+                    updated_ids = set()
+                    for cx, cy, fx, fy in detected:
+                        min_dist = float('inf')
+                        matched_id = None
+                        for obj_id, data in trackers.items():
+                            if obj_id in updated_ids:
+                                continue
+                            last = data["positions"][-1]
+                            d = euclidean_ft((fx, fy), (last[3], last[4]))
+                            if d < MATCH_DIST_FT and d < min_dist:
+                                min_dist = d
+                                matched_id = obj_id
+                        if matched_id is not None:
+                            trackers[matched_id]["positions"].append((cx, cy, current_frame_time, fx, fy))
+                            if CAPTURE_IMAGES:
+                                trackers[matched_id]["frame"] = frame.copy()
+                            updated_ids.add(matched_id)
+                        else:
+                            trackers[next_id] = {
+                                "positions": [(cx, cy, current_frame_time, fx, fy)],
+                                "logged": False,
+                                "frame": frame.copy() if CAPTURE_IMAGES else None,
+                            }
+                            updated_ids.add(next_id)
+                            next_id += 1
+
+                    stale_ids = [oid for oid in trackers if oid not in updated_ids]
+                    for oid in stale_ids:
+                        data = trackers[oid]
+                        positions = data["positions"]
+                        if data["logged"]:
+                            del trackers[oid]
+                            continue
+                        if len(positions) < MIN_POINTS_FOR_DISPLAY:
+                            if DEBUG:
+                                print(f"[DEBUG] dropped track #{oid}: points={len(positions)} < {MIN_POINTS_FOR_DISPLAY}")
+                            del trackers[oid]
+                            continue
+                        direction, dir_reason = direction_check(positions, DIRECTION_TOLERANCE_FT)
+                        if direction is None:
+                            if DEBUG:
+                                print(f"[DEBUG] dropped track #{oid}: direction reject ({dir_reason})")
+                            del trackers[oid]
+                            continue
+                        speed_ft, speed_mph, duration = compute_speed_ft(positions)
+                        if duration < MIN_DURATION_SEC:
+                            if DEBUG:
+                                print(f"[DEBUG] dropped track #{oid}: duration={duration:.2f}s < {MIN_DURATION_SEC}s")
+                            del trackers[oid]
+                            continue
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        log_car(timestamp, oid, direction, speed_mph, speed_ft,
+                                len(positions), duration,
+                                positions[0][4], positions[-1][4])
+                        if CAPTURE_IMAGES:
+                            save_capture(data.get("frame"), timestamp, oid, direction, speed_mph)
+                        del trackers[oid]
+
+                    if DISPLAY_PREVIEW:
+                        disp = frame.copy()
+                        cv2.polylines(disp, [polygon_np], isClosed=True, color=(0, 0, 255), thickness=2)
+                        for obj_id, data in trackers.items():
+                            cx, cy = data["positions"][-1][0], data["positions"][-1][1]
+                            cv2.circle(disp, (cx, cy), 6, (0, 255, 0), -1)
+                            cv2.putText(disp, f"#{obj_id}", (cx + 8, cy - 8),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+                        cv2.imshow("Detection Mask", fg_mask)
+                        cv2.imshow("Speed Tracker (Polygon)", disp)
+
+                        if cv2.waitKey(1) == ord('q'):
+                            quit_requested = True
+                            break
+
+            except KeyboardInterrupt:
+                quit_requested = True
+
+            flush_trackers(trackers)
+
+    except Exception as e:
+        flush_trackers(trackers)
+        print(f"[ERROR] Camera error: {e}")
+        if not quit_requested:
+            print(f"[INFO] Restarting in {CAMERA_RETRY_DELAY_SEC:.0f}s... (Ctrl+C to quit)")
+            try:
+                time.sleep(CAMERA_RETRY_DELAY_SEC)
+            except KeyboardInterrupt:
+                quit_requested = True
 
 if DISPLAY_PREVIEW:
     cv2.destroyAllWindows()
